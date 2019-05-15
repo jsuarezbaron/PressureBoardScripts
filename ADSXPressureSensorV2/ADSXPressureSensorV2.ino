@@ -17,52 +17,46 @@
 */
 
 
-/*
- * This version includes Serial Port Python Communication
- * /
+/* This version includes Serial Port Python Communication */
+
+#include <inc/tm4c123gh6pm.h> 
+#include <string.h>
 
 
-/**** Constants and variables ***/
+// Period of 80000 should yield an interrupt rate of 1kHz
+// This divisor will have to be spread across the match register and prescaler
+#define PERIOD            80000000U         //8000000U for 3 sec
+#define CLOCK_FREQUENCY   80000000U   //MCU FREQ
+#define PRESURE_MAX       -2
+#define MEASURE_INTERVAL  3.0
 
-////////////////const int analogInPin = A0;                   // Analog input pin (PE_3) that the asdx pressure sensor is attached to
-/*const int ADCFULLSCALE = 4095;                // ADC full scale of Tiva C is 12-bit (0-4095)
-const float reference_voltage_mv = 3300.0;    // Vcc is 5000mv (5V) for  ASDXACX030PAAA5
-const int Pmax = 30;                          // 30psi for ASDXACX030PAAA5
-const int Pmin = 0;                           // 0 psi FOR ASDXACX030PAAA5
-const int analogOutPin = BLUE_LED;            // Analog output pin that the LED is attached to
-int sensorValue = 0;                          // value read from the pressure sensor
-int outputValue = 0;                          // value output to the PWM (analog out)
-float voltage_mv = 0.0;                       // pressure sensor voltage in mV
-float voltage_v = 0.0;                        // pressure sensor voltage in volts
-float output_pressure = 0.0;                  // output pressure in psi
-float vacuum_pressure = 0.0;                  // (substract atmospheric pressure from output_preesure) // vacuum pressure in psi*/
-
+int timeDivisor = 1;
 
 double PressureValue[8];                      //Pressure array
 double Pressures[1000];                       //Pressure array
 
+const size_t arrayPressure_size = sizeof(PressureValue) / sizeof(PressureValue[0]);
+const size_t num_pressures_size = sizeof(Pressures) / sizeof(Pressures[0]);
 
-const size_t array_size = sizeof(PressureValue) / sizeof(PressureValue[0]);
-const size_t num_pressures = sizeof(Pressures) / sizeof(Pressures[0]);
+unsigned long count = 0;          //Count variable
 
 /* */ 
-unsigned long timer = 0;
+unsigned long timer = 0;        //timer
 long loopTime = 5000;   // microseconds
 
-
 /***************Median Filter*****************************/
-const int windowSize = 5;
+const int windowSize = 30;
 int circularBuffer[windowSize];
 int* circularBufferAccessor = circularBuffer;
 
-
+/*
 int values[1000];
 
 int getMeasure(){
   size_t static index = 0;
   index++;
   return values[index - 1];
-}
+}*/
 
 int appendToBuffer(int value){
   *circularBufferAccessor = value;
@@ -73,18 +67,34 @@ int appendToBuffer(int value){
 }
 
 long sum;
-int elementCount;
+
 float mean;
 
-float AddValue(int value){
+float AddSmoothValue(int value){
+  static int elementCount = 0;
   sum -= *circularBufferAccessor;
   sum += value;
   appendToBuffer(value);
 
   if(elementCount < windowSize){
     elementCount ++;
-    return (float) sum / elementCount;
+    return (float) sum / (float)elementCount;
   }
+}
+
+
+void initTimer(void)
+{
+  SYSCTL_RCGCTIMER_R |= 1;
+  TIMER0_CTL_R &= ~(1 << 8); // disable timer B
+  TIMER0_CFG_R  = 4; 
+  TIMER0_TBMR_R = 0b1010; // set T1AMS, T0MR=0
+  TIMER0_TBILR_R = PERIOD & 0xffff; // set interval (lower 16 bits) 
+  TIMER0_TBPR_R = PERIOD >> 16; // set interval (upper bits)
+  TIMER0_TBMATCHR_R = 100; //  set match value
+  TIMER0_CTL_R |= (1 << 8); // enable timer B
+  GPIO_PORTF_AFSEL_R |= (1 << 1); // select alternate function for PF1 
+  GPIO_PORTF_PCTL_R |= (7 << 4);
 }
 
 /********************************timeSync**********************************/
@@ -93,7 +103,6 @@ float AddValue(int value){
  * timeSync(unsigned long deltaT):
  * 
  */
-
 
 void timeSync(unsigned long deltaT)
 {
@@ -117,106 +126,97 @@ void timeSync(unsigned long deltaT)
 
 /*****************************************************************/
 float MeasurePreassure(){
-  const int analogInPin = A0;                   // Analog input pin (PE_3) that the asdx pressure sensor is attached to
-  analogReadResolution(12);                     // change the resolution to 12 bits and read A0
 
+  const int analogInPin = A0;                   // Analog input pin (PE_3) that the asdx pressure sensor is attached to
   /* Constants to help conver the raw analogue measurement into  pressure in psi */
-  const int ADCFULLSCALE = 4095;                // ADC full scale of Tiva C is 12-bit (0-4095)
-  const float reference_voltage_mv = 3300.0;    // Vcc is 5000mv (5V) for  ASDXACX030PAAA5
+  static const float ADCFULLSCALE = 4095;                // ADC full scale of Tiva C is 12-bit (0-4095)
+  static const float reference_voltage_v = 3.3;// Vcc is 3300mv (5V) for  
   const int Pmax = 30;                          // 30psi for ASDXACX030PAAA5
   const int Pmin = 0;                           // 0 psi FOR ASDXACX030PAAA5
   const int analogOutPin = BLUE_LED;            // Analog output pin that the LED is attached to
-  int sensorValue = 0;                          // value read from the pressure sensor
+  float sensorValue = 0;                        // value read from the pressure sensor
   int outputValue = 0;                          // value output to the PWM (analog out)
   float voltage_mv = 0.0;                       // pressure sensor voltage in mV
   float voltage_v = 0.0;                        // pressure sensor voltage in volts
   float output_pressure = 0.0;                  // output pressure in psi
   float vacuum_pressure = 0.0;                  // (substract atmospheric pressure from output_preesure) // vacuum pressure in psi
 
-    
   /* read the analog in value: */
-  sensorValue = analogRead(analogInPin);                             // digital value of pressure sensor voltage
-  voltage_mv = (sensorValue * reference_voltage_mv) / ADCFULLSCALE;  // pressure sensor voltage in mV
-  voltage_v = voltage_mv / 1000;
-
-  // map it to the range of the analog out:
-  outputValue = map(sensorValue, 0, 4095, 0, 1023); 
-  //Blink led
-  analogWrite(analogOutPin,outputValue);
-
-  output_pressure = ( ( (voltage_v - (0.10 * (reference_voltage_mv/1000) )) * (Pmax - Pmin) ) / (0.8 * (reference_voltage_mv/1000) ) ) + Pmin;
+  sensorValue = (float)analogRead(analogInPin);                      // digital value of pressure sensor voltage
+  voltage_v = (sensorValue * reference_voltage_v) / ADCFULLSCALE;   // pressure sensor voltage in V
+  outputValue = map(sensorValue, 0, 4095, 0, 1023);                 // map it to the range of the analog out:
+  analogWrite(analogOutPin, outputValue);                             //Blink led
+  output_pressure = ( ( (voltage_v - (0.10 * (reference_voltage_v) )) * (Pmax - Pmin) ) / (0.8 * (reference_voltage_v) ) ) + Pmin;
   vacuum_pressure = output_pressure - 14.6; // subtract atmospheric pressure
-
   return vacuum_pressure;
   
 }
 
 /******************************************************************/
 
-void setup() {
-  /* initialize serial communications at 9600 bps: */
-  Serial.begin(115200); 
-  timer = micros();
 
+void setup() {
+  timeDivisor = ( MEASURE_INTERVAL * CLOCK_FREQUENCY ) / PERIOD;               // Calcular el periodo de envío de cada medida de Presión
+  /* initialize serial communications at 9600 bps: */
+  Serial.begin(9600); 
+  analogReadResolution(12);                     // change the resolution to 12 bits and read A0
+  
+  //timer = micros();
+  pinMode(RED_LED, OUTPUT);  // initialize the digital pin as an output.
+  pinMode(BLUE_LED,OUTPUT);
+  initTimer();
+  attachInterrupt(RED_LED, ISR, RISING);
 }
 
 void loop() {
-
-  timeSync(loopTime);
- /* // change the resolution to 12 bits and read A0
-  analogReadResolution(12);                                           //
-
-  // read the analog in value:
-  sensorValue = analogRead(analogInPin);                             // digital value of pressure sensor voltage
-  voltage_mv = (sensorValue * reference_voltage_mv) / ADCFULLSCALE;  // pressure sensor voltage in mV
-  voltage_v = voltage_mv / 1000;
-
-  // map it to the range of the analog out:
-  outputValue = map(sensorValue, 0, 4095, 0, 1023); 
-
-  //Blink led
-
-  analogWrite(analogOutPin,outputValue);
-
-  // print the results to the serial monitor:
-  Serial.print("Voltage = ");
-  Serial.println(voltage_v);
-  //Serial.print("\r\n");
-  double output_pressure = ( ( (voltage_v - (0.10 * (reference_voltage_mv/1000) )) * (Pmax - Pmin) ) / (0.8 * (reference_voltage_mv/1000) ) ) + Pmin;
-  vacuum_pressure = output_pressure - 14.6; // subtract atmospheric pressure */
-
-  /******************************Pressure array****************************/
-  float pressure = 0;
-  pressure = MeasurePreassure();
-  /***************Send serial Data**************/
-  /*for (int i = 0; i < 300;  i++){
-    Pressures[i] = pressure;
-    Serial.println(Pressures[i]);
-    Serial.print("\t\n");
-  }*/
-
-  Serial.print("\t PressureAp = ");
-  Serial.println(pressure);
+  static int countOld = 0;
+  //timeSync(loopTime);
   
- /**********************************************/
-  // wait 10 milliseconds before the next loop
-  // for the analog-to-digital converter to settle
-  // after the last reading:
-  //////delay(500);     
+  if(count > countOld || countOld > count ){
+    countOld = count; 
+    float pressure = MeasurePreassure();                    //rawMeasure
+    if( pressure > PRESURE_MAX ){
+      digitalWrite(BLUE_LED, HIGH);
+    }
+    else{
+      digitalWrite(BLUE_LED, LOW);
+    }
 
-  delay(500);
-  //sendToPC(&output_pressure);
+    float med = AddSmoothValue( pressure );          //Add mean value
+    
+    if( (count % timeDivisor) == 0 ){   
+      //Serial.print("Count:");
+      //Serial.println(count);
+      Serial.println( ( (float)count * (float)PERIOD) / (float)CLOCK_FREQUENCY );
+      Serial.print("\t");
+      Serial.println(med);
+      //Serial.print("\n");
+      Serial.print("Count:");
+      Serial.println(count);
+    }
+   
+      
+  }    
+
 }
+  
+  /*int snapshot; 
+  count=0;
+  delay(1000);                 // wait for a second
+  snapshot=count;              // check to see how far the count got in that time (should be 1000 for 1 ms timebase)
+  Serial.println(snapshot);    // report it back  
+  */
 
 
-void sendToPC(int* data)
+/*******************************ISR****************/
+
+void ISR(void)
 {
-  byte* byteData = (byte*)(data);
-  Serial.write(byteData, 2);
+  count++;
+  /*
+  Serial.print("Count:");
+  Serial.println(count);*/
 }
- 
-void sendToPC(double* data)
-{
-  byte* byteData = (byte*)(data);
-  Serial.write(byteData, 4);
-}
+
+
+
