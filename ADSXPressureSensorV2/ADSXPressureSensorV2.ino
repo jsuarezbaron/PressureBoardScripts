@@ -21,16 +21,22 @@
 
 #include <inc/tm4c123gh6pm.h> 
 #include <string.h>
+#include <stdio.h>
 
 
 // Period of 80000 should yield an interrupt rate of 1kHz
 // This divisor will have to be spread across the match register and prescaler
 #define PERIOD            80000000U         //8000000U for 3 sec
 #define CLOCK_FREQUENCY   80000000U   //MCU FREQ
-#define PRESURE_MAX       -2
-#define MEASURE_INTERVAL  3.0
+#define PRESURE_MAX       30
+#define PRESURE_MIN       0
+#define MEASURE_INTERVAL  1.0
 
 int timeDivisor = 1;
+
+char str[6];                   //String to send via SerialPort
+
+unsigned int contadorSerial = 0;
 
 double PressureValue[8];                      //Pressure array
 double Pressures[1000];                       //Pressure array
@@ -127,19 +133,19 @@ void timeSync(unsigned long deltaT)
 /*****************************************************************/
 float MeasurePreassure(){
 
-  const int analogInPin = A0;                   // Analog input pin (PE_3) that the asdx pressure sensor is attached to
+  const int analogInPin = A0;                        // Analog input pin (PE_3) that the asdx pressure sensor is attached to
   /* Constants to help conver the raw analogue measurement into  pressure in psi */
-  static const float ADCFULLSCALE = 4095;                // ADC full scale of Tiva C is 12-bit (0-4095)
-  static const float reference_voltage_v = 3.3;// Vcc is 3300mv (5V) for  
-  const int Pmax = 30;                          // 30psi for ASDXACX030PAAA5
-  const int Pmin = 0;                           // 0 psi FOR ASDXACX030PAAA5
-  const int analogOutPin = BLUE_LED;            // Analog output pin that the LED is attached to
-  float sensorValue = 0;                        // value read from the pressure sensor
-  int outputValue = 0;                          // value output to the PWM (analog out)
-  float voltage_mv = 0.0;                       // pressure sensor voltage in mV
-  float voltage_v = 0.0;                        // pressure sensor voltage in volts
-  float output_pressure = 0.0;                  // output pressure in psi
-  float vacuum_pressure = 0.0;                  // (substract atmospheric pressure from output_preesure) // vacuum pressure in psi
+  static const float ADCFULLSCALE = 4095;           // ADC full scale of Tiva C is 12-bit (0-4095)
+  static const float reference_voltage_v = 3.3;     // Vcc is 3300mv (5V) for  
+  const int Pmax = 30;                              // 30psi for ASDXACX030PAAA5
+  const int Pmin = 0;                               // 0 psi FOR ASDXACX030PAAA5
+  const int analogOutPin = BLUE_LED;                // Analog output pin that the LED is attached to
+  float sensorValue = 0;                            // value read from the pressure sensor
+  int outputValue = 0;                              // value output to the PWM (analog out)
+  float voltage_mv = 0.0;                           // pressure sensor voltage in mV
+  float voltage_v = 0.0;                            // pressure sensor voltage in volts
+  float output_pressure = 0.0;                      // output pressure in psi
+  float vacuum_pressure = 0.0;                      // (substract atmospheric pressure from output_preesure) // vacuum pressure in psi
 
   /* read the analog in value: */
   sensorValue = (float)analogRead(analogInPin);                      // digital value of pressure sensor voltage
@@ -166,7 +172,11 @@ void setup() {
   pinMode(BLUE_LED,OUTPUT);
   initTimer();
   attachInterrupt(RED_LED, ISR, RISING);
+  memset(str, 0, 16);  //Escribir 0 en los pirmeros 16 bytes de str
 }
+
+
+
 
 void loop() {
   static int countOld = 0;
@@ -182,24 +192,41 @@ void loop() {
       digitalWrite(BLUE_LED, LOW);
     }
 
-    float med = AddSmoothValue( pressure );          //Add mean value
+    int med = AddSmoothValue( pressure );          //Add mean value
     
-    if( (count % timeDivisor) == 0 ){   
+    if( (count % timeDivisor) == 0 ){  
+      floatToString(str, pressure);
+      
+      //////////////////////////sprintf(str, "C:%d\n", contadorSerial++);
+
+      ///puts(str);
       //Serial.print("Count:");
       //Serial.println(count);
-      Serial.println( ( (float)count * (float)PERIOD) / (float)CLOCK_FREQUENCY );
-      Serial.print("\t");
-      Serial.println(med);
-      //Serial.print("\n");
-      Serial.print("Count:");
-      Serial.println(count);
+      ////////////////////////////////////////////////Serial.println( ( (float)count * (float)PERIOD) / (float)CLOCK_FREQUENCY );
+      //////Serial.print("\t");
+      ////Serial.print("Pressure:");
+      ///Serial.println(med);
+      Serial.print(str);
+      Serial.print("\n");
+      //////////////////Serial.print("Count:");
+      ////////////////Serial.println(count);
     }
    
       
   }    
 
 }
-  
+
+void floatToString(char* string, float num ){
+  int valor = num *100;
+  for( int i = 0; i < 4; i++){
+     string[i] = (valor % 10) + 48;
+     valor /= 10;
+  }
+  string[4] = '\n';
+  string[5] = 0;
+}
+
   /*int snapshot; 
   count=0;
   delay(1000);                 // wait for a second
