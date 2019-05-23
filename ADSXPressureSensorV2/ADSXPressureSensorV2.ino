@@ -26,15 +26,29 @@
 
 // Period of 80000 should yield an interrupt rate of 1kHz
 // This divisor will have to be spread across the match register and prescaler
-#define PERIOD            80000000U         //8000000U for 3 sec
+#define PERIOD            80000000U         //8000000U for 1 sec
 #define CLOCK_FREQUENCY   80000000U   //MCU FREQ
 #define PRESURE_MAX       30
 #define PRESURE_MIN       0
-#define MEASURE_INTERVAL  1.0
+#define MEASURE_INTERVAL  5
 
-int timeDivisor = 1;
+unsigned int timeDivisor = 5;
 
 char str[6];                   //String to send via SerialPort
+
+unsigned long count = 0;          //Count variable
+
+/* */ 
+unsigned long timer = 0;        //timer
+long loopTime = 5000;   // microseconds
+
+
+float dataReceived;
+char incomingByte;   // for incoming serial data
+
+/* Flags for continuos data send */
+unsigned int presionEnviada;
+unsigned int automatico;
 
 unsigned int contadorSerial = 0;
 
@@ -43,12 +57,6 @@ double Pressures[1000];                       //Pressure array
 
 const size_t arrayPressure_size = sizeof(PressureValue) / sizeof(PressureValue[0]);
 const size_t num_pressures_size = sizeof(Pressures) / sizeof(Pressures[0]);
-
-unsigned long count = 0;          //Count variable
-
-/* */ 
-unsigned long timer = 0;        //timer
-long loopTime = 5000;   // microseconds
 
 /***************Median Filter*****************************/
 const int windowSize = 30;
@@ -73,7 +81,6 @@ int appendToBuffer(int value){
 }
 
 long sum;
-
 float mean;
 
 float AddSmoothValue(int value){
@@ -103,32 +110,6 @@ void initTimer(void)
   GPIO_PORTF_PCTL_R |= (7 << 4);
 }
 
-/********************************timeSync**********************************/
-
-/*
- * timeSync(unsigned long deltaT):
- * 
- */
-
-void timeSync(unsigned long deltaT)
-{
-  unsigned long currTime = micros();
-  long timeToDelay = deltaT - (currTime - timer);
-  if (timeToDelay > 5000)
-  {
-    delay(timeToDelay / 1000);
-    delayMicroseconds(timeToDelay % 1000);
-  }
-  else if (timeToDelay > 0)
-  {
-    delayMicroseconds(timeToDelay);
-  }
-  else
-  {
-      // timeToDelay is negative so we start immediately
-  }
-  timer = currTime + timeToDelay;
-}
 
 /*****************************************************************/
 float MeasurePreassure(){
@@ -160,7 +141,6 @@ float MeasurePreassure(){
 
 /******************************************************************/
 
-
 void setup() {
   timeDivisor = ( MEASURE_INTERVAL * CLOCK_FREQUENCY ) / PERIOD;               // Calcular el periodo de envío de cada medida de Presión
   /* initialize serial communications at 9600 bps: */
@@ -177,45 +157,97 @@ void setup() {
 
 
 
-
 void loop() {
-  static int countOld = 0;
+  static unsigned int countOld = 0;
   //timeSync(loopTime);
+  static float pressure = 0.0;
   
   if(count > countOld || countOld > count ){
     countOld = count; 
-    float pressure = MeasurePreassure();                    //rawMeasure
+    pressure = MeasurePreassure();                    //rawMeasure
+
     if( pressure > PRESURE_MAX ){
       digitalWrite(BLUE_LED, HIGH);
     }
     else{
       digitalWrite(BLUE_LED, LOW);
     }
+  }////
 
-    int med = AddSmoothValue( pressure );          //Add mean value
-    
-    if( (count % timeDivisor) == 0 ){  
-      floatToString(str, pressure);
+  /* Continuos send Pressure*/
+   if( count == 0 &&  presionEnviada == 0 && automatico == 1){
+	  Serial.write(timeDivisor);
+	  floatToString(str, pressure);
+	  Serial.print(str);
+	  Serial.print("\r\n");
+	  presionEnviada = 1;
+  }
+
+   // send data only when you receive data:
+   while (Serial.available() > 0) {
+	   // read the incoming byte:
+	  incomingByte = Serial.read();
+
+	  switch(incomingByte){
+
+	  	  case '\n':
+	  		  break;
+
+	  	  case 'A':
+	  		  automatico = 1;
+	  		  break;
+
+	  	 /*Deshabilita medici�n continua */
+	  	  case 'B':
+			  automatico = 0;
+			  break;
+
+	  	  case -1:
+	  		  //Serial.print("\Error\r\n");
+	  		  Serial.write("\Error\r\n");
+	  		  break;
+
+	  	  case 'P':
+	  		  floatToString(str, pressure);
+	  		  Serial.print(str);
+	  		  Serial.print("\r\n");
+	  		  break;
+
+	  	  case 'T':
+	  		  dataReceived = Serial.parseFloat();
+	  		  timeDivisor = (int)(( dataReceived * CLOCK_FREQUENCY ) / PERIOD );
+	  		  break;
+
+	  	  default:
+	  		  break;
+	  }
+
+  }
+
       
       //////////////////////////sprintf(str, "C:%d\n", contadorSerial++);
 
       ///puts(str);
       //Serial.print("Count:");
       //Serial.println(count);
-      ////////////////////////////////////////////////Serial.println( ( (float)count * (float)PERIOD) / (float)CLOCK_FREQUENCY );
+      /////Serial.println( ( (float)count * (float)PERIOD) / (float)CLOCK_FREQUENCY );
       //////Serial.print("\t");
       ////Serial.print("Pressure:");
       ///Serial.println(med);
-      Serial.print(str);
-      Serial.print("\n");
+      //Serial.print(str);
+      //Serial.print("\n");
       //////////////////Serial.print("Count:");
       ////////////////Serial.println(count);
-    }
+//    }
    
       
-  }    
+ }
 
-}
+
+/*
+ *
+ * */
+
 
 void floatToString(char* string, float num ){
   int valor = num *100;
@@ -239,7 +271,14 @@ void floatToString(char* string, float num ){
 
 void ISR(void)
 {
-  count++;
+	if (count == 0){
+		count = timeDivisor;
+	}
+
+	else{
+		count--;
+	}
+  presionEnviada = 0;
   /*
   Serial.print("Count:");
   Serial.println(count);*/
